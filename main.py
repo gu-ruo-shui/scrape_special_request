@@ -10,108 +10,100 @@ from fastapi import (  # Query is used for more detailed parameter definition
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 
-# --- Configuration ---
-# Default values are removed as we'll require them from query parameters for the /scrape endpoint
-# DEFAULT_PAGE_URL = "https://example.com/your-webpage"
-# DEFAULT_TARGET_POST_URL_CONTAINS = "/api/your-data-endpoint"
-
-# --- FastAPI App Setup ---
-playwright_instance = None
-browser_instance = None
+app = FastAPI()
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global playwright_instance, browser_instance
-    print("Starting up Playwright...")
-    playwright_instance = await async_playwright().start()
-    browser_instance = await playwright_instance.chromium.launch(
-        headless=True,
-        args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-    )
-    print("Playwright and browser started.")
-    yield
-    print("Shutting down Playwright...")
-    if browser_instance:
-        await browser_instance.close()
-    if playwright_instance:
-        await playwright_instance.stop()
-    print("Playwright shut down.")
+# 用于存储捕获到的数据
+captured_post_data = None
+capture_event = asyncio.Event()  # 用于通知主协程数据已捕获
 
 
-app = FastAPI(lifespan=lifespan)
-
-
-async def scrape_data(page_url: str, target_post_url_contains: str):
-    """
-    Core scraping logic.
-    """
-    if not browser_instance:
-        raise RuntimeError("Browser instance not initialized. Check lifespan.")
-
-    captured_post_data = None
-    capture_event = asyncio.Event()
+async def main_scraper(page_url, target_url):
+    global captured_post_data, capture_event
+    captured_post_data = None  # 重置
+    capture_event.clear()  # 重置事件
 
     async def handle_response(response):
-        nonlocal captured_post_data
+        global captured_post_data
+        # 检查是否是我们感兴趣的 POST 请求
+        # 你可以根据 URL、方法、甚至请求体来判断
         is_target_post = (
-            target_post_url_contains in response.url
-            and response.request.method == "POST"
+            target_url in response.url and response.request.method == "POST"
         )
+        # is_target_post = (response.url == TARGET_POST_URL_EXACT and response.request.method == "POST")
 
         if is_target_post:
             print(f"[*] Intercepted POST response from: {response.url}")
             try:
+                # 尝试解析为 JSON，如果不是 JSON，可以获取文本
                 data = await response.json()
+                # data = await response.text() # 如果是文本
                 captured_post_data = data
                 print(
-                    f"[*] Data captured (JSON): {json.dumps(data, indent=2, ensure_ascii=False)}"
+                    f"[*] Data captured: {json.dumps(data, indent=2, ensure_ascii=False)}"
                 )
-            except Exception:
+                capture_event.set()  # 通知主协程数据已捕获
+            except Exception as e:
+                print(f"[!] Error parsing response data from {response.url}: {e}")
                 try:
                     text_data = await response.text()
-                    captured_post_data = {"raw_text": text_data}
-                    print(f"[*] Data captured (Text): {text_data[:200]}...")
-                except Exception as e_text:
                     print(
-                        f"[!] Error parsing response data from {response.url}: {e_text}"
-                    )
-                    captured_post_data = {"error": str(e_text), "url": response.url}
-            finally:
-                if not capture_event.is_set():
+                        f"[!] Response text: {text_data[:500]}..."
+                    )  # 打印部分原始文本帮助调试
+                    captured_post_data = {"error": str(e), "raw_text": text_data}
+                except Exception as e_text:
+                    print(f"[!] Error getting text response: {e_text}")
+                    captured_post_data = {"error": str(e_text)}
+                finally:
                     capture_event.set()
 
-    context = await browser_instance.new_context(
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36"
-    )
-    page = await context.new_page()
-    page.on("response", handle_response)
+    async with async_playwright() as p:
+        # browser = await p.chromium.launch(headless=True) # 生产环境用 True
+        browser = await p.chromium.launch(
+            headless=False, slow_mo=500
+        )  # 调试时用 False，slow_mo 减慢操作
 
-    try:
+        # 创建一个浏览器上下文，可以设置 user-agent 等
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36"
+        )
+        page = await context.new_page()
+
+        # 注册响应拦截器，在导航之前设置
+        page.on("response", handle_response)
+
         print(f"[*] Navigating to {page_url}...")
-        await page.goto(page_url, wait_until="networkidle", timeout=60000)
-        print("[*] Page loaded, waiting for target POST request...")
-
         try:
-            await asyncio.wait_for(capture_event.wait(), timeout=30.0)
+            # 打开页面，等待网络空闲，表明页面主要资源（包括JS触发的请求）已加载
+            # 根据实际情况调整 timeout，如果页面加载慢或 POST 请求触发晚
+            await page.goto(
+                page_url, wait_until="networkidle", timeout=60000
+            )  # 60 秒超时
+            print("[*] Page loaded, waiting for target POST request...")
+        except PlaywrightTimeoutError:
+            print(
+                "[!] Page navigation or networkidle timeout. The POST might have already occurred or not at all."
+            )
+        except Exception as e:
+            print(f"[!] Error during page navigation: {e}")
+            await browser.close()
+            return None
+
+        # 等待 handle_response 捕获到数据或超时
+        try:
+            await asyncio.wait_for(
+                capture_event.wait(), timeout=30.0
+            )  # 等待30秒让POST请求完成
         except asyncio.TimeoutError:
             print("[!] Timed out waiting for the target POST request to be captured.")
+            # 即使超时，如果 captured_post_data 在此之前被设置了，也可能是有用的
             if captured_post_data:
                 print("[!] Data was captured before timeout, proceeding.")
+            else:
+                print("[!] No data captured after timeout.")
 
-    except PlaywrightTimeoutError:
-        print(f"[!] Page navigation or networkidle timeout for {page_url}.")
-    except Exception as e:
-        print(f"[!] Error during scraping process for {page_url}: {e}")
-        if captured_post_data is None:
-            captured_post_data = {"error": f"Scraping lifecycle error: {str(e)}"}
-    finally:
-        if "page" in locals() and not page.is_closed():
-            await page.close()
-        if "context" in locals():
-            await context.close()
-
-    return captured_post_data
+        await browser.close()
+        return captured_post_data
 
 
 @app.get("/scrape")
@@ -137,7 +129,7 @@ async def trigger_scrape_endpoint(
     print(
         f"Initiating scrape for: {page_url}, looking for POST containing: {target_url_fragment}"
     )
-    data = await scrape_data(page_url, target_url_fragment)
+    data = await main_scraper(page_url, target_url_fragment)
 
     if data:
         return data
