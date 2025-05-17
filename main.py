@@ -60,7 +60,7 @@ async def main_scraper(page_url, target_url):
     async with async_playwright() as p:
         # browser = await p.chromium.launch(headless=True) # 生产环境用 True
         browser = await p.chromium.launch(
-            headless=False, slow_mo=500
+            headless=True, slow_mo=500
         )  # 调试时用 False，slow_mo 减慢操作
 
         # 创建一个浏览器上下文，可以设置 user-agent 等
