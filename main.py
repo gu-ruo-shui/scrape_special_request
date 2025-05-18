@@ -51,6 +51,16 @@ async def main_scraper(page_url, target_url):
                         f"[!] Response text: {text_data[:500]}...  status: {response.status}"
                     )  # 打印部分原始文本帮助调试
                     captured_post_data = {"error": str(e), "raw_text": text_data}
+
+                    # 获取并打印导致此错误响应的原始请求的详细信息
+                    request = response.request  # 获取请求对象
+                    print(f"    [DEBUG] Failed Request URL: {request.url}")
+                    print(f"    [DEBUG] Failed Request Method: {request.method}")
+                    # 打印请求头
+                    request_headers_str = json.dumps(
+                        await request.all_headers(), indent=2, ensure_ascii=False
+                    )
+                    print(f"    [DEBUG] Failed Request Headers: {request_headers_str}")
                 except Exception as e_text:
                     print(f"[!] Error getting text response: {e_text}")
                     captured_post_data = {"error": str(e_text)}
