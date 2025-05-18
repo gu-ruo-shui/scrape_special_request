@@ -75,7 +75,7 @@ async def main_scraper(page_url, target_url):
 
         # 创建一个浏览器上下文，可以设置 user-agent 等
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
         )
         page = await context.new_page()
 
@@ -90,6 +90,9 @@ async def main_scraper(page_url, target_url):
                 page_url, wait_until="networkidle", timeout=60000
             )  # 60 秒超时
             print("[*] Page loaded, waiting for target POST request...")
+
+            await page.wait_for_timeout(1000)
+
         except PlaywrightTimeoutError:
             print(
                 "[!] Page navigation or networkidle timeout. The POST might have already occurred or not at all."
