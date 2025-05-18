@@ -37,7 +37,7 @@ async def main_scraper(page_url, target_url):
             try:
                 # 尝试解析为 JSON，如果不是 JSON，可以获取文本
                 data = await response.json()
-                # data = await response.text() # 如果是文本
+                # data = await response.text()  # 如果是文本
                 captured_post_data = data
                 print(
                     f"[*] Data captured: {json.dumps(data, indent=2, ensure_ascii=False)}"
@@ -48,7 +48,7 @@ async def main_scraper(page_url, target_url):
                 try:
                     text_data = await response.text()
                     print(
-                        f"[!] Response text: {text_data[:500]}..."
+                        f"[!] Response text: {text_data[:500]}...  status: {response.status}"
                     )  # 打印部分原始文本帮助调试
                     captured_post_data = {"error": str(e), "raw_text": text_data}
                 except Exception as e_text:
