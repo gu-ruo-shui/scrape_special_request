@@ -39,9 +39,7 @@ async def main_scraper(page_url, target_url):
                 data = await response.json()
                 # data = await response.text()  # 如果是文本
                 captured_post_data = data
-                print(
-                    f"[*] Data captured: {json.dumps(data, indent=2, ensure_ascii=False)}"
-                )
+                print("[*] Data captured")
                 capture_event.set()  # 通知主协程数据已捕获
             except Exception as e:
                 print(f"[!] Error parsing response data from {response.url}: {e}")
@@ -65,7 +63,9 @@ async def main_scraper(page_url, target_url):
                     print(f"[!] Error getting text response: {e_text}")
                     captured_post_data = {"error": str(e_text)}
                 finally:
-                    capture_event.set()
+                    # 这里有的网站会发 2 次请求, 第 1 次请求 405 因为此时 csrf-token 为 null
+                    # capture_event.set()
+                    pass
 
     async with async_playwright() as p:
         # browser = await p.chromium.launch(headless=True) # 生产环境用 True
@@ -105,7 +105,7 @@ async def main_scraper(page_url, target_url):
         # 等待 handle_response 捕获到数据或超时
         try:
             await asyncio.wait_for(
-                capture_event.wait(), timeout=30.0
+                capture_event.wait(), timeout=10.0
             )  # 等待30秒让POST请求完成
         except asyncio.TimeoutError:
             print("[!] Timed out waiting for the target POST request to be captured.")
